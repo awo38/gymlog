@@ -300,6 +300,46 @@ nav.tabs button.live{color:var(--accent)}
 #modal .row button{min-height:52px;border-radius:999px;font-size:16px;font-weight:600;background:var(--card-2)}
 #modal #m-ok{background:var(--accent);color:var(--on-accent)}
 #modal #m-ok.danger{background:var(--red);color:#fff}
+
+/* Übergänge zwischen Ansichten */
+nav.tabs{view-transition-name:tabs}
+nav.tabs button[aria-current="page"]{view-transition-name:tab-pill}
+#timer{view-transition-name:timer}
+::view-transition-group(*){animation-duration:.42s;animation-timing-function:cubic-bezier(.22,1,.36,1)}
+::view-transition-old(root),::view-transition-new(root){animation-duration:.42s;animation-timing-function:cubic-bezier(.22,1,.36,1);mix-blend-mode:normal}
+html[data-vt="next"]::view-transition-old(root){animation-name:vt-fade-out,vt-left-s}
+html[data-vt="next"]::view-transition-new(root){animation-name:vt-fade-in,vt-from-right-s}
+html[data-vt="prev"]::view-transition-old(root){animation-name:vt-fade-out,vt-right-s}
+html[data-vt="prev"]::view-transition-new(root){animation-name:vt-fade-in,vt-from-left-s}
+html[data-vt="fade"]::view-transition-old(root){animation-name:vt-fade-out}
+html[data-vt="fade"]::view-transition-new(root){animation-name:vt-fade-in}
+html[data-vt="push"]::view-transition-old(root){animation-name:vt-push-out;z-index:1}
+html[data-vt="push"]::view-transition-new(root){animation-name:vt-push-in;z-index:2;box-shadow:-20px 0 40px rgb(0 0 0 / .35)}
+html[data-vt="pop"]::view-transition-old(root){animation-name:vt-pop-out;z-index:2;box-shadow:-20px 0 40px rgb(0 0 0 / .35)}
+html[data-vt="pop"]::view-transition-new(root){animation-name:vt-pop-in;z-index:1}
+@keyframes vt-fade-in{from{opacity:0}}
+@keyframes vt-fade-out{to{opacity:0}}
+@keyframes vt-from-right-s{from{transform:translateX(28px)}}
+@keyframes vt-from-left-s{from{transform:translateX(-28px)}}
+@keyframes vt-left-s{to{transform:translateX(-28px)}}
+@keyframes vt-right-s{to{transform:translateX(28px)}}
+@keyframes vt-push-in{from{transform:translateX(100%)}}
+@keyframes vt-push-out{to{transform:translateX(-28%);filter:brightness(.6)}}
+@keyframes vt-pop-in{from{transform:translateX(-28%);filter:brightness(.6)}}
+@keyframes vt-pop-out{to{transform:translateX(100%)}}
+/* Karten steigen nacheinander auf */
+.wrap.rise > *{animation:rise .5s cubic-bezier(.22,1,.36,1) both;animation-delay:calc(var(--i,0) * 35ms + 60ms)}
+@keyframes rise{from{opacity:0;transform:translateY(14px) scale(.985)}}
+/* Ersatz, wenn der Browser keine View Transitions kann */
+.wrap.in-push{animation:vt-push-in .42s cubic-bezier(.22,1,.36,1)}
+.wrap.in-pop{animation:vt-pop-in .42s cubic-bezier(.22,1,.36,1)}
+/* Tipp-Feedback */
+.pill,.tile,.rbtn,.tag,.chip,.mini,.cap,.chk,.li,nav.tabs button,.h-top{transition:transform .18s cubic-bezier(.3,1.5,.5,1),background .2s,color .2s}
+.pill:active,.tile:active,.rbtn:active,.tag:active,.chip:active,.mini:active,.cap:active,nav.tabs button:active{transform:scale(.95)}
+.chk:active{transform:scale(.88)}
+.chk.just{animation:pop .35s cubic-bezier(.3,1.6,.5,1)}
+@keyframes pop{0%{transform:scale(.7)}100%{transform:scale(1)}}
+@media (prefers-reduced-motion: reduce){::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation:none!important}}
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 </style>
 
@@ -866,13 +906,43 @@ function lineChart(pts) {
 
 /* ---------- Render ---------- */
 const app = document.getElementById("app");
-function render() {
+/* ---------- Übergänge ---------- */
+const TAB_ORDER = { home: 0, plans: 1, history: 2, body: 3 };
+const DEPTH = { home: 0, plans: 0, history: 0, body: 0, edit: 1, workout: 1 };
+const reduceMotion = () => window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+let shownView = null;
+function paint() {
   if (S.view === "workout" && !S.active) S.view = "home";
   const V = { home: viewHome, plans: viewPlans, edit: viewEdit, workout: viewWorkout, history: viewHistory, body: viewBody };
   app.innerHTML = (V[S.view] || viewHome)();
   renderTabs();
   tick();
   keepAwake();
+}
+function stagger() {
+  [...app.children].forEach((c, i) => c.style.setProperty("--i", Math.min(i, 8)));
+  app.classList.remove("rise"); void app.offsetWidth; app.classList.add("rise");
+}
+function render() {
+  if (S.view === "workout" && !S.active) S.view = "home";
+  const from = shownView, to = S.view;
+  shownView = to;
+  if (from == null || from === to || reduceMotion()) { paint(); return; }
+  // Richtung: Tabs nebeneinander = Überblenden, Detailseiten = iOS-artiges Schieben
+  let kind = "fade";
+  if (DEPTH[to] > DEPTH[from]) kind = "push";
+  else if (DEPTH[to] < DEPTH[from]) kind = "pop";
+  else if (TAB_ORDER[to] != null && TAB_ORDER[from] != null) kind = TAB_ORDER[to] > TAB_ORDER[from] ? "next" : "prev";
+  document.documentElement.dataset.vt = kind;
+  const update = () => { paint(); window.scrollTo(0, 0); if (kind === "next" || kind === "prev") stagger(); };
+  if (document.startViewTransition) {
+    const t = document.startViewTransition(update);
+    t.finished.finally(() => { delete document.documentElement.dataset.vt; });
+  } else {
+    update();
+    app.classList.remove("in-push", "in-pop"); void app.offsetWidth;
+    if (kind === "push" || kind === "pop") app.classList.add("in-" + kind);
+  }
 }
 const syncTag = () => `<span class="sync" id="sync" data-s="${S.sync}">${syncText()}</span>`;
 const top = (title, lead = "<span></span>", trail = "<span></span>") => `<header class="top">${lead}<h1>${esc(title)}</h1>${trail}</header>`;
@@ -1252,7 +1322,7 @@ const A = {
     // Offenes Eingabefeld übernehmen, bevor abgehakt wird
     if (document.activeElement && document.activeElement.dataset.bind) document.activeElement.blur();
     s.done = !s.done;
-    const row = el.closest(".set"); row.classList.toggle("done", s.done); el.setAttribute("aria-pressed", s.done);
+    const row = el.closest(".set"); row.classList.toggle("done", s.done); el.classList.remove("just"); if (s.done) { void el.offsetWidth; el.classList.add("just"); } el.setAttribute("aria-pressed", s.done);
     document.getElementById("cnt-" + e.id).textContent = e.sets.filter(x => x.done).length + "/" + e.sets.length;
     if (s.done) { startTimer(e.rest); try { navigator.vibrate && navigator.vibrate(30); } catch (x) {} }
     persist("active");
